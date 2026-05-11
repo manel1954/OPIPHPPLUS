@@ -15,8 +15,8 @@ fusion=$(sed -n '2p'  $usuario/MMDVMHost/MMDVMHost.ini)
 frbm=$(sed -n '13p'  $usuario/MMDVMHost/MMDVMHost.ini)
 frplus=$(sed -n '13p'  $usuario/MMDVMHost/MMDVMHost.ini)
 
-wget -qO- --post-data="callBM=$bm&callPLUS=$plus&masterBM=$masterbm&masterPLUS=$masterplus&radio=$masterradio&version=$version&ESPECIAL=$masterespecial&YSFGateway=$masterYSFGateway" \
-http://associacioader.com/prueba1.php
+sudo wget -post-data http://associacioader.com/prueba1.php?callBM=$bm'&'callPLUS=$plus'&'masterBM=$masterbm'&'masterPLUS=$masterplus'&'radio=$masterradio'&'version=$version'&'ESPECIAL=$masterespecial'&'YSFGateway=$masterYSFGateway                  
+
 
 #sudo rm -R /home/pi/associacioader.com
 #sudo rm -R /home/pi/A108/associacioader.com
