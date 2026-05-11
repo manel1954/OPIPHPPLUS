@@ -1,8 +1,7 @@
 ﻿#!/bin/bash
 
 # path usuario
-usuario="/home/pi"
-usuario="$usuario"
+usuario="/home/pi/"
 fecha_imagen="11-05-26"
 nombre_imagen="Opi3-"
 version="Opi3-11-05-26"
