@@ -14,7 +14,8 @@ if ($action === 'start') {
     echo json_encode($st==='active' ? ['ok'=>true,'output'=>'✅ Iniciado'] : ['ok'=>false,'error'=>'No arrancó: '.$st]);
     exit;
 }
- 
+
+
 if ($action === 'stop') {
     shell_exec("sudo systemctl stop $SERVICE 2>/dev/null"); usleep(300000);
     header('Content-Type: application/json');
