@@ -156,25 +156,112 @@ if ($action === 'station-info') {
 }
 
 if ($action === 'sysinfo') {
-    $s1 = file('/proc/stat'); $cpu1 = preg_split('/\s+/', trim($s1[0])); usleep(300000);
-    $s2 = file('/proc/stat'); $cpu2 = preg_split('/\s+/', trim($s2[0]));
-    $idle1 = $cpu1[4]; $total1 = array_sum(array_slice($cpu1, 1));
-    $idle2 = $cpu2[4]; $total2 = array_sum(array_slice($cpu2, 1));
-    $dTotal = $total2 - $total1; $dIdle = $idle2 - $idle1;
-    $cpu = $dTotal > 0 ? round(100 * ($dTotal - $dIdle) / $dTotal, 1) : 0;
-    $memRaw = file('/proc/meminfo'); $mem = [];
-    foreach ($memRaw as $line) { if (preg_match('/^(\w+):\s+(\d+)/', $line, $m)) $mem[$m[1]] = intval($m[2]); }
+
+    /*
+    ==========================================================
+    CPU LOAD REAL ESTABLE
+    ==========================================================
+    */
+
+    function getCpuUsagePercent() {
+
+        // Load average de 1 minuto
+        $load = sys_getloadavg();
+
+        // Número de cores CPU
+        $cores = (int) trim(shell_exec("nproc"));
+
+        if ($cores <= 0) {
+            $cores = 1;
+        }
+
+        // Convertir load average a %
+        $cpu = ($load[0] / $cores) * 100;
+
+        // Limitar a 100%
+        if ($cpu > 100) {
+            $cpu = 100;
+        }
+
+        return round($cpu, 1);
+    }
+
+    /*
+    ==========================================================
+    CPU GLOBAL
+    ==========================================================
+    */
+
+    $cpuOverall = getCpuUsagePercent();
+
+    /*
+    ==========================================================
+    CPU CORES (SIMULADOS ESTABLES)
+    ==========================================================
+    */
+
+    $cpuCores = [];
+
+    $cores = (int) trim(shell_exec("nproc"));
+
+    for ($i = 0; $i < $cores; $i++) {
+
+        // ligera variación visual por core
+        $variation = rand(-4, 4);
+
+        $value = $cpuOverall + $variation;
+
+        if ($value < 0) $value = 0;
+        if ($value > 100) $value = 100;
+
+        $cpuCores[] = round($value, 1);
+    }
+
+
+    // RAM (optimizado)
+    $mem = [];
+    foreach (file('/proc/meminfo') as $line) {
+        if (preg_match('/^(\w+):\s+(\d+)/', $line, $m)) {
+            $mem[$m[1]] = (int)$m[2];
+        }
+    }
     $ramTotal = round($mem['MemTotal'] / 1048576, 2);
     $ramFree  = round(($mem['MemAvailable'] ?? $mem['MemFree']) / 1048576, 2);
     $ramUsed  = round($ramTotal - $ramFree, 2);
+
+    // DISK
     $diskTotal = round(disk_total_space('/') / 1073741824, 1);
     $diskFree  = round(disk_free_space('/') / 1073741824, 1);
     $diskUsed  = round($diskTotal - $diskFree, 1);
+
+    // TEMP (con fallback para Allwinner H6)
     $temp = '';
-    if (file_exists('/sys/class/thermal/thermal_zone0/temp'))
-        $temp = round(intval(trim(file_get_contents('/sys/class/thermal/thermal_zone0/temp'))) / 1000, 1) . ' °C';
+    $tempPaths = [
+        '/sys/class/thermal/thermal_zone0/temp',
+        '/sys/class/hwmon/hwmon0/temp1_input',
+        '/sys/class/hwmon/hwmon1/temp1_input'
+    ];
+    foreach ($tempPaths as $path) {
+        if (file_exists($path)) {
+            $val = (int)file_get_contents($path);
+            $temp = round($val / ($val > 1000 ? 1000 : 1), 1) . ' °C';
+            break;
+        }
+    }
+
     header('Content-Type: application/json');
-    echo json_encode(['cpu'=>$cpu,'ramTotal'=>$ramTotal,'ramUsed'=>$ramUsed,'ramFree'=>$ramFree,'diskTotal'=>$diskTotal,'diskUsed'=>$diskUsed,'diskFree'=>$diskFree,'temp'=>$temp]);
+    echo json_encode([
+        'cpu'        => $cpuOverall,      // Uso general (todos los núcleos)
+        'cpuCores'   => $cpuCores,        // Array [cpu0%, cpu1%, cpu2%, cpu3%]
+        'ramTotal'   => $ramTotal,
+        'ramUsed'    => $ramUsed,
+        'ramFree'    => $ramFree,
+        'diskTotal'  => $diskTotal,
+        'diskUsed'   => $diskUsed,
+        'diskFree'   => $diskFree,
+        'temp'       => $temp
+    ]);
+
     exit;
 }
 
@@ -296,46 +383,106 @@ function lookupCall($callsign) {
     return ['dmrid'=>'','name'=>''];
 }
 
+// ── DMR ──────────────────────────────────────────────────────────────────────
 if ($action === 'transmission') {
-    $log = shell_exec("sudo journalctl -u mmdvmhost -n 200 --no-pager --output=short 2>/dev/null");
-    $lines = array_reverse(explode("\n",$log));
-    $active=false;$callsign='';$dmrid='';$name='';$tg='';$slot='';$source='';
-    foreach ($lines as $line) {
-        if(preg_match('/DMR Slot \d.*(end of voice|lost RF|watchdog)/i',$line)){$active=false;break;}
-        if(preg_match('/DMR Slot (\d), received (RF|network) voice header from (\S+) to TG (\d+)/i',$line,$m)){$active=true;$slot=$m[1];$source=strtoupper($m[2]);$callsign=strtoupper(rtrim($m[3],','));$tg=$m[4];break;}
+    $stateFile = '/tmp/mmdvm_tx_state.json';
+    $lhFile    = '/tmp/mmdvm_lastheard.json';
+    $log   = shell_exec("sudo journalctl -u mmdvmhost -n 500 --no-pager --output=short 2>/dev/null");
+    $lines = array_reverse(explode("\n", $log));
+
+    $state = ['active'=>false,'callsign'=>'','name'=>'','dmrid'=>'','tg'=>'','slot'=>'','source'=>''];
+    if (file_exists($stateFile)) {
+        $saved = json_decode(file_get_contents($stateFile), true);
+        if (is_array($saved)) $state = $saved;
     }
-    if($callsign){$info=lookupCall($callsign);$dmrid=$info['dmrid'];$name=$info['name'];}
-    $lastHeard=[];$seen=[];
     foreach ($lines as $line) {
-        if(preg_match('/(\d{2}:\d{2}:\d{2})\.\d+\s+DMR Slot (\d), received (RF|network) voice header from (\S+) to TG (\d+)/i',$line,$m)){
-            $cs=strtoupper(rtrim($m[4],','));
-            if(!in_array($cs,$seen)){$inf=lookupCall($cs);$lastHeard[]=['callsign'=>$cs,'name'=>$inf['name'],'dmrid'=>$inf['dmrid'],'tg'=>$m[5],'slot'=>$m[2],'source'=>strtoupper($m[3]),'time'=>$m[1]];$seen[]=$cs;if(count($lastHeard)>=5)break;}
+        if (preg_match('/DMR Slot (\d), received (RF|network) voice header from (\S+) to TG (\d+)/i', $line, $m)) {
+            $callsign = strtoupper(rtrim($m[3], ','));
+            $info = lookupCall($callsign);
+            $state = ['active'=>true,'callsign'=>$callsign,'name'=>$info['name'],'dmrid'=>$info['dmrid'],'tg'=>$m[4],'slot'=>$m[1],'source'=>strtoupper($m[2])];
+            file_put_contents($stateFile, json_encode($state));
+            break;
+        }
+        if (preg_match('/DMR Slot \d.*end of voice/i', $line)) {
+            $state['active'] = false;
+            file_put_contents($stateFile, json_encode($state));
+            break;
         }
     }
-    header('Content-Type: application/json');
-    echo json_encode(['active'=>$active,'callsign'=>$callsign,'name'=>$name,'dmrid'=>$dmrid,'tg'=>$tg,'slot'=>$slot,'source'=>$source,'lastHeard'=>$lastHeard]); exit;
-}
 
-if ($action === 'dstar-transmission') {
-    $log = shell_exec("sudo journalctl -u mmdvmdstar -n 300 --no-pager --output=short 2>/dev/null");
-    $lines = array_reverse(explode("\n", $log ?? ''));
-    $active = false; $callsign = ''; $source = ''; $name = '';
-    foreach ($lines as $line) {
-        if (preg_match('/D-Star.*(end of|lost RF|watchdog|finished|timeout)/i', $line)) { $active = false; break; }
-        if (preg_match('/D-Star.*received (RF|network).*from\s+([A-Z0-9\/]+)/i', $line, $m)) { $active = true; $source = strtoupper($m[1]); $callsign = strtoupper(trim($m[2])); break; }
-        if (preg_match('/received (RF|network) header from\s+([A-Z0-9\/]+)/i', $line, $m)) { $active = true; $source = strtoupper($m[1]); $callsign = strtoupper(trim($m[2])); break; }
-    }
-    if ($callsign) { $info = lookupCall(preg_replace('/\/.*$/', '', $callsign)); $name = $info['name']; }
     $lastHeard = []; $seen = [];
     foreach ($lines as $line) {
-        $cs = ''; $src = ''; $time = '';
-        if (preg_match('/(\d{2}:\d{2}:\d{2}).*D-Star.*received (RF|network).*from\s+([A-Z0-9\/]+)/i', $line, $m)) { $time=$m[1]; $src=strtoupper($m[2]); $cs=strtoupper(trim($m[3])); }
-        elseif (preg_match('/(\d{2}:\d{2}:\d{2}).*received (RF|network) header from\s+([A-Z0-9\/]+)/i', $line, $m)) { $time=$m[1]; $src=strtoupper($m[2]); $cs=strtoupper(trim($m[3])); }
-        if ($cs && !in_array($cs, $seen)) { $inf = lookupCall(preg_replace('/\/.*$/','',$cs)); $lastHeard[] = ['callsign'=>$cs,'name'=>$inf['name'],'source'=>$src,'time'=>$time]; $seen[] = $cs; if (count($lastHeard) >= 5) break; }
+        if (preg_match('/^[A-Z][a-z]{2}\s+\d+\s+(\d{2}:\d{2}:\d{2}).*DMR Slot (\d), received (RF|network) voice header from (\S+) to TG (\d+)/i', $line, $m)) {
+            $cs = strtoupper(rtrim($m[4], ','));
+            if (!in_array($cs, $seen)) {
+                $inf = lookupCall($cs);
+                $lastHeard[] = ['callsign'=>$cs,'name'=>$inf['name'],'dmrid'=>$inf['dmrid'],'tg'=>$m[5],'slot'=>$m[2],'source'=>strtoupper($m[3]),'time'=>$m[1]];
+                $seen[] = $cs;
+                if (count($lastHeard) >= 5) break;
+            }
+        }
     }
+    if (!empty($lastHeard)) {
+        file_put_contents($lhFile, json_encode($lastHeard));
+    } elseif (file_exists($lhFile)) {
+        $lastHeard = json_decode(file_get_contents($lhFile), true) ?: [];
+    }
+
+    $state['lastHeard'] = $lastHeard;
     header('Content-Type: application/json');
-    echo json_encode(['active'=>$active,'callsign'=>$callsign,'name'=>$name,'source'=>$source,'lastHeard'=>$lastHeard]);
+    echo json_encode($state);
     exit;
+}
+
+// ── DSTAR ──────────────────────────────────────────────────────────────────────
+if ($action === 'dstar-transmission') {
+    $stateFile = '/tmp/dstar_tx_state.json';
+    $lhFile    = '/tmp/dstar_lastheard.json';
+    $log   = shell_exec("sudo journalctl -u mmdvmdstar -n 500 --no-pager --output=short 2>/dev/null");
+    $lines = array_reverse(explode("\n", $log ?? ''));
+
+    $state = ['active'=>false,'callsign'=>'','name'=>'','source'=>''];
+    if (file_exists($stateFile)) {
+        $saved = json_decode(file_get_contents($stateFile), true);
+        if (is_array($saved)) $state = $saved;
+    }
+    foreach ($lines as $line) {
+        if (preg_match('/D-Star.*(end of|lost RF|watchdog|finished|timeout)/i', $line)) {
+            $state['active'] = false; file_put_contents($stateFile, json_encode($state)); break;
+        }
+        if (preg_match('/D-Star.*received (RF|network).*from\s+([A-Z0-9\/]+)/i', $line, $m)) {
+            $cs = strtoupper(trim($m[2])); $inf = lookupCall(preg_replace('/\/.*$/', '', $cs));
+            $state = ['active'=>true,'callsign'=>$cs,'name'=>$inf['name'],'source'=>strtoupper($m[1])];
+            file_put_contents($stateFile, json_encode($state)); break;
+        }
+        if (preg_match('/received (RF|network) header from\s+([A-Z0-9\/]+)/i', $line, $m)) {
+            $cs = strtoupper(trim($m[2])); $inf = lookupCall(preg_replace('/\/.*$/', '', $cs));
+            $state = ['active'=>true,'callsign'=>$cs,'name'=>$inf['name'],'source'=>strtoupper($m[1])];
+            file_put_contents($stateFile, json_encode($state)); break;
+        }
+    }
+
+    $lastHeard = []; $seen = [];
+    foreach ($lines as $line) {
+        $cs=''; $src=''; $time='';
+        if (preg_match('/(\d{2}:\d{2}:\d{2}).*D-Star.*received (RF|network).*from\s+([A-Z0-9\/]+)/i', $line, $m))
+            { $time=$m[1]; $src=strtoupper($m[2]); $cs=strtoupper(trim($m[3])); }
+        elseif (preg_match('/(\d{2}:\d{2}:\d{2}).*received (RF|network) header from\s+([A-Z0-9\/]+)/i', $line, $m))
+            { $time=$m[1]; $src=strtoupper($m[2]); $cs=strtoupper(trim($m[3])); }
+        if ($cs && !in_array($cs, $seen)) {
+            $inf = lookupCall(preg_replace('/\/.*$/', '', $cs));
+            $lastHeard[] = ['callsign'=>$cs,'name'=>$inf['name'],'source'=>$src,'time'=>$time];
+            $seen[] = $cs; if (count($lastHeard) >= 5) break;
+        }
+    }
+    if (!empty($lastHeard)) {
+        file_put_contents($lhFile, json_encode($lastHeard));
+    } elseif (file_exists($lhFile)) {
+        $lastHeard = json_decode(file_get_contents($lhFile), true) ?: [];
+    }
+
+    $state['lastHeard'] = $lastHeard;
+    header('Content-Type: application/json'); echo json_encode($state); exit;
 }
 
 if ($action === 'dstar-status') {
@@ -353,27 +500,59 @@ if ($action === 'dstar-logs')  {
     header('Content-Type: application/json'); echo json_encode(['gateway'=>htmlspecialchars($gw??''),'mmdvm'=>htmlspecialchars($mmd??'')]); exit;
 }
 
+// ── YSF ──────────────────────────────────────────────────────────────────────
 if ($action === 'ysf-transmission') {
-    $log = shell_exec("sudo journalctl -u mmdvmysf -n 300 --no-pager --output=short 2>/dev/null");
-    if(empty(trim($log)))$log=shell_exec("sudo journalctl -u ysfgateway -n 300 --no-pager --output=short 2>/dev/null");
-    $lines=array_reverse(explode("\n",$log));
-    $active=false;$callsign='';$name='';$dest='';$source='';
-    foreach ($lines as $line) {
-        if(preg_match('/YSF.*(end of|lost RF|lost net|watchdog|timeout|no reply|voice end|fin)/i',$line)){$active=false;break;}
-        if(preg_match('/YSF.*voice (end|fin|stop)/i',$line)){$active=false;break;}
-        if(preg_match('/(\d{2}:\d{2}:\d{2}).*YSF.*received (RF|network) voice.*from\s+(\S+)/i',$line,$m)){$active=true;$source=strtoupper($m[2]);$callsign=strtoupper(trim($m[3]));break;}
-        if(preg_match('/(\d{2}:\d{2}:\d{2}).*YSF.*from\s+(\S+)\s+to\s+(\S+)/i',$line,$m)){$active=true;$source='RF';$callsign=strtoupper(trim($m[2]));$dest=trim($m[3]);break;}
+    $stateFile = '/tmp/ysf_tx_state.json';
+    $lhFile    = '/tmp/ysf_lastheard.json';
+    $log = shell_exec("sudo journalctl -u mmdvmysf -n 500 --no-pager --output=short 2>/dev/null");
+    if (empty(trim($log))) $log = shell_exec("sudo journalctl -u ysfgateway -n 500 --no-pager --output=short 2>/dev/null");
+    $lines = array_reverse(explode("\n", $log));
+
+    $state = ['active'=>false,'callsign'=>'','name'=>'','dest'=>'','source'=>''];
+    if (file_exists($stateFile)) {
+        $saved = json_decode(file_get_contents($stateFile), true);
+        if (is_array($saved)) $state = $saved;
     }
-    if($callsign){$info=lookupCall($callsign);$name=$info['name'];}
-    $lastHeard=[];$seen=[];
     foreach ($lines as $line) {
-        $cs='';$src='';$time='';$dst='';
-        if(preg_match('/(\d{2}:\d{2}:\d{2}).*YSF.*received (RF|network) voice.*from\s+(\S+)/i',$line,$m)){$time=$m[1];$src=strtoupper($m[2]);$cs=strtoupper(trim($m[3]));}
-        elseif(preg_match('/(\d{2}:\d{2}:\d{2}).*YSF.*from\s+(\S+)\s+to\s+(\S+)/i',$line,$m)){$time=$m[1];$src='RF';$cs=strtoupper(trim($m[2]));$dst=trim($m[3]);}
-        if($cs&&!in_array($cs,$seen)){$inf=lookupCall($cs);$lastHeard[]=['callsign'=>$cs,'name'=>$inf['name'],'dest'=>$dst,'source'=>$src,'time'=>$time];$seen[]=$cs;if(count($lastHeard)>=5)break;}
+        if (preg_match('/YSF.*(end of|lost RF|lost net|watchdog|timeout|no reply|voice end|fin)/i', $line)) {
+            $state['active'] = false; file_put_contents($stateFile, json_encode($state)); break;
+        }
+        if (preg_match('/YSF.*voice (end|fin|stop)/i', $line)) {
+            $state['active'] = false; file_put_contents($stateFile, json_encode($state)); break;
+        }
+        if (preg_match('/(\d{2}:\d{2}:\d{2}).*YSF.*received (RF|network) voice.*from\s+(\S+)/i', $line, $m)) {
+            $cs = strtoupper(trim($m[3])); $inf = lookupCall($cs);
+            $state = ['active'=>true,'callsign'=>$cs,'name'=>$inf['name'],'dest'=>'','source'=>strtoupper($m[2])];
+            file_put_contents($stateFile, json_encode($state)); break;
+        }
+        if (preg_match('/(\d{2}:\d{2}:\d{2}).*YSF.*?(RF|network).*?from\s+(\S+)\s+to\s+(\S+)/i', $line, $m)) {
+            $cs = strtoupper(trim($m[3])); $inf = lookupCall($cs);
+            $state = ['active'=>true,'callsign'=>$cs,'name'=>$inf['name'],'dest'=>trim($m[4]),'source'=>strtoupper($m[2])];
+            file_put_contents($stateFile, json_encode($state)); break;
+        }
     }
-    header('Content-Type: application/json');
-    echo json_encode(['active'=>$active,'callsign'=>$callsign,'name'=>$name,'dest'=>$dest,'source'=>$source,'lastHeard'=>$lastHeard]); exit;
+
+    $lastHeard = []; $seen = [];
+    foreach ($lines as $line) {
+        $cs=''; $src=''; $time=''; $dst='';
+        if (preg_match('/(\d{2}:\d{2}:\d{2}).*YSF.*received (RF|network) voice.*from\s+(\S+)/i', $line, $m))
+            { $time=$m[1]; $src=strtoupper($m[2]); $cs=strtoupper(trim($m[3])); }
+        elseif (preg_match('/(\d{2}:\d{2}:\d{2}).*YSF.*?(RF|network).*?from\s+(\S+)\s+to\s+(\S+)/i', $line, $m))
+            { $time=$m[1]; $src=strtoupper($m[2]); $cs=strtoupper(trim($m[3])); $dst=trim($m[4]); }
+        if ($cs && !in_array($cs, $seen)) {
+            $inf = lookupCall($cs);
+            $lastHeard[] = ['callsign'=>$cs,'name'=>$inf['name'],'dest'=>$dst,'source'=>$src,'time'=>$time];
+            $seen[] = $cs; if (count($lastHeard) >= 5) break;
+        }
+    }
+    if (!empty($lastHeard)) {
+        file_put_contents($lhFile, json_encode($lastHeard));
+    } elseif (file_exists($lhFile)) {
+        $lastHeard = json_decode(file_get_contents($lhFile), true) ?: [];
+    }
+
+    $state['lastHeard'] = $lastHeard;
+    header('Content-Type: application/json'); echo json_encode($state); exit;
 }
 
 // ── NXDN ──────────────────────────────────────────────────────────────────────
@@ -410,38 +589,55 @@ if ($action === 'nxdn-logs') {
     echo json_encode(['gateway'=>htmlspecialchars($gw??''),'mmdvm'=>htmlspecialchars($mmd??'')]);
     exit;
 }
+
 if ($action === 'nxdn-transmission') {
-    $log = shell_exec("sudo journalctl -u mmdvmnxdn -n 300 --no-pager --output=short 2>/dev/null");
+    $stateFile = '/tmp/nxdn_tx_state.json';
+    $lhFile    = '/tmp/nxdn_lastheard.json';
+    $log   = shell_exec("sudo journalctl -u mmdvmnxdn -n 500 --no-pager --output=short 2>/dev/null");
     $lines = array_reverse(explode("\n", $log ?? ''));
-    $active = false; $callsign = ''; $source = ''; $name = ''; $tg = '';
+
+    $state = ['active'=>false,'callsign'=>'','name'=>'','tg'=>'','source'=>''];
+    if (file_exists($stateFile)) {
+        $saved = json_decode(file_get_contents($stateFile), true);
+        if (is_array($saved)) $state = $saved;
+    }
     foreach ($lines as $line) {
-        if (preg_match('/NXDN.*(end of|lost RF|watchdog|finished|timeout)/i', $line)) { $active = false; break; }
+        if (preg_match('/NXDN.*(end of|lost RF|watchdog|finished|timeout)/i', $line)) {
+            $state['active'] = false; file_put_contents($stateFile, json_encode($state)); break;
+        }
         if (preg_match('/NXDN.*received (RF|network).*from\s+([A-Z0-9]+).*to\s+(\d+)/i', $line, $m)) {
-            $active = true; $source = strtoupper($m[1]); $callsign = strtoupper(trim($m[2])); $tg = $m[3]; break;
+            $cs = strtoupper(trim($m[2])); $inf = lookupCall($cs);
+            $state = ['active'=>true,'callsign'=>$cs,'name'=>$inf['name'],'tg'=>$m[3],'source'=>strtoupper($m[1])];
+            file_put_contents($stateFile, json_encode($state)); break;
         }
         if (preg_match('/NXDN.*received (RF|network).*from\s+([A-Z0-9]+)/i', $line, $m)) {
-            $active = true; $source = strtoupper($m[1]); $callsign = strtoupper(trim($m[2])); break;
+            $cs = strtoupper(trim($m[2])); $inf = lookupCall($cs);
+            $state = ['active'=>true,'callsign'=>$cs,'name'=>$inf['name'],'tg'=>'','source'=>strtoupper($m[1])];
+            file_put_contents($stateFile, json_encode($state)); break;
         }
     }
-    if ($callsign) { $info = lookupCall($callsign); $name = $info['name']; }
+
     $lastHeard = []; $seen = [];
     foreach ($lines as $line) {
-        $cs = ''; $src = ''; $time = ''; $tgr = '';
-        if (preg_match('/(\d{2}:\d{2}:\d{2}).*NXDN.*received (RF|network).*from\s+([A-Z0-9]+).*to\s+(\d+)/i', $line, $m)) {
-            $time=$m[1]; $src=strtoupper($m[2]); $cs=strtoupper(trim($m[3])); $tgr=$m[4];
-        } elseif (preg_match('/(\d{2}:\d{2}:\d{2}).*NXDN.*received (RF|network).*from\s+([A-Z0-9]+)/i', $line, $m)) {
-            $time=$m[1]; $src=strtoupper($m[2]); $cs=strtoupper(trim($m[3]));
-        }
+        $cs=''; $src=''; $time=''; $tgr='';
+        if (preg_match('/(\d{2}:\d{2}:\d{2}).*NXDN.*received (RF|network).*from\s+([A-Z0-9]+).*to\s+(\d+)/i', $line, $m))
+            { $time=$m[1]; $src=strtoupper($m[2]); $cs=strtoupper(trim($m[3])); $tgr=$m[4]; }
+        elseif (preg_match('/(\d{2}:\d{2}:\d{2}).*NXDN.*received (RF|network).*from\s+([A-Z0-9]+)/i', $line, $m))
+            { $time=$m[1]; $src=strtoupper($m[2]); $cs=strtoupper(trim($m[3])); }
         if ($cs && !in_array($cs, $seen)) {
             $inf = lookupCall($cs);
             $lastHeard[] = ['callsign'=>$cs,'name'=>$inf['name'],'tg'=>$tgr,'source'=>$src,'time'=>$time];
-            $seen[] = $cs;
-            if (count($lastHeard) >= 5) break;
+            $seen[] = $cs; if (count($lastHeard) >= 5) break;
         }
     }
-    header('Content-Type: application/json');
-    echo json_encode(['active'=>$active,'callsign'=>$callsign,'name'=>$name,'tg'=>$tg,'source'=>$source,'lastHeard'=>$lastHeard]);
-    exit;
+    if (!empty($lastHeard)) {
+        file_put_contents($lhFile, json_encode($lastHeard));
+    } elseif (file_exists($lhFile)) {
+        $lastHeard = json_decode(file_get_contents($lhFile), true) ?: [];
+    }
+
+    $state['lastHeard'] = $lastHeard;
+    header('Content-Type: application/json'); echo json_encode($state); exit;
 }
 ?>
 <!DOCTYPE html>
@@ -449,7 +645,7 @@ if ($action === 'nxdn-transmission') {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Panel PHPPLUS</title>
+<title>Panel PHPPLUS REM</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@500;700&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
 <style>
@@ -467,6 +663,8 @@ body { background: var(--bg); color: var(--text); font-family: var(--font-ui); f
 .btn-header.amber:hover { background: rgba(255,179,0,.1); }
 .btn-header.red { color: var(--red); border: 1px solid var(--red); }
 .btn-header.red:hover { background: rgba(255,69,96,.15); }
+.btn-header.green { color: var(--green); border: 1px solid var(--green); }
+.btn-header.green:hover { background: rgba(34,197,94,.1); }
 button.btn-header { font-family: var(--font-mono); }
 .ctrl-body { padding: 2rem; max-width: 1400px; margin: 0 auto; }
 .station-card { background: linear-gradient(135deg,#111720 60%,#0d1e2a 100%); border: 1px solid var(--border); border-radius: 10px; padding: 1.2rem 2rem; display: flex; align-items: center; gap: 2.0rem; margin-bottom: 1.8rem; flex-wrap: wrap; position: relative; overflow: hidden; }
@@ -710,15 +908,17 @@ button.btn-header { font-family: var(--font-mono); }
 <body>
 <header class="ctrl-header">
 <div class="ctrl-header-top">
-<img src="Logo_ea3eiz.png" alt="EA3EIZ" style="height:40px;width:auto;">
-<h1>PANEL SISTEMAS DIGITALES PARA RADIOAFICIONADOS PHPPLUS</h1>
+<a href="http://rem-esp.es" target="_blank">
+  <img src="Logo_REM-ESP_EA4RCR.png" alt="EA4RCR" style="height:40px;width:auto;">
+</a>
+<h1>SISTEMA DE CONTROL Y MONITORIZACIÓN PARA RADIOAFICIONADOS PHPPlus</h1>
 </div>
 <div class="ctrl-header-btns">
-<a href="editor_general_config.php" class="btn-header red"> 📄 editor general </a>
+<a href="editor_general_config.php" class="btn-header green"> 📄 editor general </a>
 <a href="?action=backup-configs" class="btn-header amber"> 💾 Hacer copia de seguridad </a>
 <button onclick="openRestore()" class="btn-header cyan"> 📂 Restaurar copia de seguridad </button>
 <div class="dropdown-wrap" id="dropActualizaciones">
-  <button class="btn-header cyan">⬇ Actualizaciones ▾</button>
+  <button class="btn-header green">⬇ Actualizaciones ▾</button>
   <div class="dropdown-menu-custom">
     <button class="dropdown-item-custom" onclick="runUpdate('imagen')">🖼 Actualizar Imagen</button>
     <button class="dropdown-item-custom" onclick="runUpdate('ids')">📋 Actualizar IDs</button>
@@ -728,7 +928,7 @@ button.btn-header { font-family: var(--font-mono); }
 </div>
 <button class="btn-header cyan" onclick="xtTtydOpen()">⌨ Terminal</button>
 <a href="extra.php" class="btn-header amber">☰ Menu Extra</a>
-<button id="btnReboot" class="btn-header red" onclick="rebootPi()">⏻ Reiniciar Pi</button>
+<button id="btnReboot" class="btn-header red" onclick="rebootPi()">⏻ Reiniciar Opi</button>
 </div>
 </header>
 <main class="ctrl-body">
@@ -864,7 +1064,7 @@ button.btn-header { font-family: var(--font-mono); }
       <div class="nx-vu" id="ysfVuLeft"></div><div class="nx-vu right" id="ysfVuRight"></div>
       <div class="nx-center" id="ysfNxCenter"><div class="nx-clock" id="ysfNxClock" style="color:#c084ff;">00:00:00</div><div class="nx-date" id="ysfNxDate" style="color:#9b59d4;">—</div></div>
       <div class="nx-txbar" id="ysfTxBar"></div>
-      <div class="nx-botbar ysf-bar"><span style="color:#5a3a8a;font-family:var(--font-mono);font-size:.65rem;" id="ysfProto">YSF</span><span style="color:#5a3a8a;font-family:var(--font-mono);font-size:.90rem;"><?php $ysfGwIni=parseMMDVMIni('/home/pi/YSFClients/YSFGateway/YSFGateway.ini');$ysfRefStart=trim($ysfGwIni['Network']['Startup']??'—');echo "Reflector: " . htmlspecialchars($ysfRefStart); ?></span><span class="nx-source" id="ysfSource"></span></div>
+      <div class="nx-botbar ysf-bar"><span style="color:#5a3a8a;font-family:var(--font-mono);font-size:.65rem;" id="ysfProto">C4FM . DIGITAL VOICE</span><span style="color:#5a3a8a;font-family:var(--font-mono);font-size:.65rem;"><?php $ysfGwIni=parseMMDVMIni('/home/pi/YSFClients/YSFGateway/YSFGateway.ini');$ysfRefStart=trim($ysfGwIni['Network']['Startup']??'—');echo "Ref: " . htmlspecialchars($ysfRefStart); ?></span><span class="nx-source" id="ysfSource"></span></div>
     </div>
   </div>
 </div>
@@ -877,7 +1077,7 @@ button.btn-header { font-family: var(--font-mono); }
       <div class="nx-vu" id="dstarVuLeft"></div><div class="nx-vu right" id="dstarVuRight"></div>
       <div class="nx-center" id="dstarNxCenter"><div class="nx-clock" id="dstarNxClock" style="color:#00e5ff;">00:00:00</div><div class="nx-date" id="dstarNxDate" style="color:#009090;">—</div></div>
       <div class="nx-txbar" id="dstarTxBar"></div>
-      <div class="nx-botbar dstar-bar"><span style="color:#006070;font-family:var(--font-mono);font-size:.65rem;">D-STAR · DIGITAL VOICE</span><span style="color:green;font-family:var(--font-mono);font-size:.90rem;"><?php $dgwIni=parseMMDVMIni('/home/pi/DStarGateway/DStarGateway.ini');$dstarRef=trim($dgwIni['Repeater 1']['Reflector']??'—');echo "Reflector: " . htmlspecialchars($dstarRef); ?></span><span class="nx-source" id="dstarSource"></span></div>
+      <div class="nx-botbar dstar-bar"><span style="color:#006070;font-family:var(--font-mono);font-size:.65rem;">D-STAR · DIGITAL VOICE</span><span style="color:green;font-family:var(--font-mono);font-size:.65rem;"><?php $dgwIni=parseMMDVMIni('/home/pi/DStarGateway/DStarGateway.ini');$dstarRef=trim($dgwIni['Repeater 1']['Reflector']??'—');echo "Ref: " . htmlspecialchars($dstarRef); ?></span><span class="nx-source" id="dstarSource"></span></div>
     </div>
   </div>
   <div id="nxdnDisplayPanel">
@@ -888,7 +1088,7 @@ button.btn-header { font-family: var(--font-mono); }
       <div class="nx-vu" id="nxdnVuLeft"></div><div class="nx-vu right" id="nxdnVuRight"></div>
       <div class="nx-center" id="nxdnNxCenter"><div class="nx-clock" id="nxdnNxClock" style="color:#ffd700;">00:00:00</div><div class="nx-date" id="nxdnNxDate" style="color:#b8a000;">—</div></div>
       <div class="nx-txbar" id="nxdnTxBar"></div>
-      <div class="nx-botbar nxdn-bar"><span style="color:#707000;font-family:var(--font-mono);font-size:.65rem;">NXDN · DIGITAL VOICE</span><span style="color:#ff0;font-family:var(--font-mono);font-size:.90rem;"><?php $nxdnGwIni=parseMMDVMIni('/home/pi/NXDNClients/NXDNGateway/NXDNGateway.ini');$nxdnRef=trim($nxdnGwIni['Network']['Static']??'—');echo 'Reflector: ' . htmlspecialchars($nxdnRef); ?></span><span class="nx-source" id="nxdnSource"></span></div>
+      <div class="nx-botbar nxdn-bar"><span style="color:#707000;font-family:var(--font-mono);font-size:.65rem;">NXDN · DIGITAL VOICE</span><span style="color:#ff0;font-family:var(--font-mono);font-size:.65rem;"><?php $nxdnGwIni=parseMMDVMIni('/home/pi/NXDNClients/NXDNGateway/NXDNGateway.ini');$nxdnRef=trim($nxdnGwIni['Network']['Static']??'—');echo 'Ref: ' . htmlspecialchars($nxdnRef); ?></span><span class="nx-source" id="nxdnSource"></span></div>
     </div>
   </div>
 </div>
@@ -1084,13 +1284,15 @@ function setYSFToggle(on){const chk=document.getElementById('chkYSF'),lbl=docume
 
 function showIdle(){currentlyActive=false;animateVU(false,'dmr');document.getElementById('nxTxBar').classList.remove('active');document.getElementById('nxTG').textContent='—';document.getElementById('nxSlot').textContent='—';document.getElementById('nxDmrid').textContent='—';const src=document.getElementById('nxSource');src.textContent='';src.className='nx-source';document.getElementById('nxCenter').innerHTML='<div class="nx-clock" id="nxClock">00:00:00</div><div class="nx-date" id="nxDate">—</div>';updateClock();}
 function showActive(d){currentlyActive=true;animateVU(true,'dmr');document.getElementById('nxTxBar').classList.add('active');document.getElementById('nxTG').textContent=d.tg?'TG '+d.tg:'—';document.getElementById('nxSlot').textContent=d.slot||'—';document.getElementById('nxDmrid').textContent=d.dmrid||'—';const src=document.getElementById('nxSource');if(d.source==='RF'){src.textContent='RF';src.className='nx-source rf';}else if(d.source==='NETWORK'){src.textContent='NET';src.className='nx-source net';}else{src.textContent='';src.className='nx-source';}const flag=getFlagByCall(d.callsign);document.getElementById('nxCenter').innerHTML=`<div class="nx-callsign">${flag} ${esc(d.callsign)}</div>`+(d.name?`<div class="nx-name">${esc(d.name)}</div>`:'');}
-function showYSFIdle(){ysfCurrentlyActive=false;animateVU(false,'ysf');document.getElementById('ysfTxBar').className='nx-txbar';document.getElementById('ysfDest').textContent='—';document.getElementById('ysfProto').textContent='YSF';const src=document.getElementById('ysfSource');src.textContent='';src.className='nx-source';document.getElementById('ysfNxCenter').innerHTML='<div class="nx-clock" id="ysfNxClock" style="color:#c084ff;">00:00:00</div><div class="nx-date" id="ysfNxDate" style="color:#9b59d4;">—</div>';updateClock();}
+function showYSFIdle(){ysfCurrentlyActive=false;animateVU(false,'ysf');document.getElementById('ysfTxBar').className='nx-txbar';document.getElementById('ysfDest').textContent='—';document.getElementById('ysfProto').textContent='C4FM . DIGITAL VOICE';const src=document.getElementById('ysfSource');src.textContent='';src.className='nx-source';document.getElementById('ysfNxCenter').innerHTML='<div class="nx-clock" id="ysfNxClock" style="color:#c084ff;">00:00:00</div><div class="nx-date" id="ysfNxDate" style="color:#9b59d4;">—</div>';updateClock();}
 function showYSFActive(d){ysfCurrentlyActive=true;animateVU(true,'ysf');document.getElementById('ysfTxBar').className='nx-txbar active-ysf';document.getElementById('ysfDest').textContent=d.dest?d.dest:'ALL';const src=document.getElementById('ysfSource');if(d.source==='RF'){src.textContent='RF';src.className='nx-source rf';}else if(d.source==='NETWORK'){src.textContent='NET';src.className='nx-source net';}else{src.textContent='';src.className='nx-source';}const flag=getFlagByCall(d.callsign);document.getElementById('ysfNxCenter').innerHTML=`<div class="nx-callsign ysf">${flag} ${esc(d.callsign)}</div>`+(d.name?`<div class="nx-name ysf">${esc(d.name)}</div>`:'');}
 
 function renderLastHeard(list,activeCall){const body=document.getElementById('lhBody');if(!list||list.length===0){body.innerHTML='<div class="lh-empty">Sin actividad reciente</div>';return;}body.innerHTML=list.map(r=>{const isActive=activeCall&&r.callsign===activeCall;const srcCls=r.source==='RF'?'rf':'net',srcLbl=r.source==='RF'?'RF':'NET';const dot=isActive?'<span class="lh-tx-dot"></span>':'';const flag=getFlagByCall(r.callsign);return`<div class="lh-row${isActive?' lh-active':''}"><div class="lh-call-wrap">${dot}<span class="lh-call">${flag} ${esc(r.callsign)}</span></div><span class="lh-name">${esc(r.name||'—')}</span><span class="lh-tg">${esc(r.tg||'—')}</span><span class="lh-time">${esc(r.time||'—')}</span><span class="lh-src ${srcCls}">${srcLbl}</span></div>`;}).join('');}
-function renderYSFLastHeard(list,activeCall){const body=document.getElementById('ysfLhBody');if(!list||list.length===0){body.innerHTML='<div class="lh-empty">Sin actividad C4FM</div>';return;}body.innerHTML=list.map(r=>{const isActive=activeCall&&r.callsign===activeCall;const srcCls=r.source==='RF'?'rf':'net',srcLbl=r.source==='RF'?'RF':'NET';const dot=isActive?'<span class="lh-tx-dot-ysf"></span>':'';const flag=getFlagByCall(r.callsign);return`<div class="lh-row-ysf${isActive?' lh-active':''}"><div class="lh-call-wrap">${dot}<span class="lh-call-ysf">${flag} ${esc(r.callsign)}</span></div><span class="lh-name">${esc(r.name||'—')}</span><span class="lh-time">${esc(r.time||'—')}</span><span class="lh-src-ysf ${srcCls}">${srcLbl}</span></div>`;}).join('');}
+
+function renderYSFLastHeard(list,activeCall){const body=document.getElementById('ysfLhBody');if(!list||list.length===0){body.innerHTML='<div class="lh-empty">Sin actividad C4FM</div>';return;}body.innerHTML=list.map(r=>{const isActive=activeCall&&r.callsign===activeCall;const srcCls=r.source==='RF'?'rf':'net',srcLbl=r.source==='RF'?'RF':'NET';const dot=isActive?'<span class="lh-tx-dot-ysf"></span>':'';const flag=getFlagByCall(r.callsign);return`<div class="lh-row-ysf${isActive?' lh-active':''}"><div class="lh-call-wrap">${dot}<span class="lh-call-ysf">${flag} ${esc(r.callsign)}</span></div><span class="lh-name">${esc(r.name||'—')}</span><span class="lh-time">${esc(r.time||'—')}</span><span class="lh-src ${srcCls}">${srcLbl}</span></div>`;}).join('');}
 
 async function fetchTransmission(){try{const r=await fetch('?action=transmission');const d=await r.json();if(d.active){showActive(d);}else{showIdle();}renderLastHeard(d.lastHeard||[],d.active?d.callsign:null);}catch(e){}}
+
 async function fetchYSFTransmission(){try{const r=await fetch('?action=ysf-transmission');const d=await r.json();if(d.active){ysfLastActiveTs=Date.now();showYSFActive(d);}else{if(ysfCurrentlyActive)showYSFIdle();}renderYSFLastHeard(d.lastHeard||[],d.active?d.callsign:null);}catch(e){if(ysfCurrentlyActive&&(Date.now()-ysfLastActiveTs)>YSF_IDLE_TIMEOUT)showYSFIdle();}}
 
 async function checkStatus(){try{const r=await fetch('?action=status');const d=await r.json();const gw=d.gateway==='active',mmd=d.mmdvm==='active';setDot('dot-gateway',gw?'active':'off');setDot('dot-mmdvm',mmd?'active':'off');setDot('dot-mosquitto',gw?'active':'off');running=gw||mmd;setDMRToggle(running);if(running)startRefresh();}catch(e){}}
@@ -1176,7 +1378,7 @@ function closeUpdate(){document.getElementById('updateModal').classList.remove('
 const UPDATE_TITLES={imagen:'🖼 Actualizar Imagen',ids:'📋 Actualizar IDs',ysf:'📡 Actualizar Reflectores YSF'};
 const UPDATE_ACTIONS={imagen:'?action=update-imagen',ids:'?action=update-ids',ysf:'?action=update-ysf'};
 async function runUpdate(type){document.getElementById('dropActualizaciones').classList.remove('open');document.getElementById('updateTitle').textContent=UPDATE_TITLES[type];const con=document.getElementById('updateConsole');con.textContent='⏳ Ejecutando, espera…';document.getElementById('updateCloseBtn').disabled=true;document.getElementById('updateModal').classList.add('open');try{const r=await fetch(UPDATE_ACTIONS[type]);const d=await r.json();con.textContent=d.output||'(sin salida)';con.scrollTop=con.scrollHeight;}catch(e){con.textContent='✖ Error de red: '+e.message;}finally{document.getElementById('updateCloseBtn').disabled=false;}}
-async function rebootPi(){if(!confirm('¿Seguro que quieres reiniciar la Raspberry Pi?'))return;const btn=document.getElementById('btnReboot');btn.textContent='⏻ Reiniciando…';btn.disabled=true;await fetch('?action=reboot');}
+async function rebootPi(){if(!confirm('¿ Seguro que quieres reiniciar la Orangepi ?'))return;const btn=document.getElementById('btnReboot');btn.textContent='⏻ Reiniciando…';btn.disabled=true;await fetch('?action=reboot');}
 function closeInstalar(){document.getElementById('installModal').classList.remove('open');}
 async function confirmarInstalacion(){const btn=document.getElementById('btnInstalarOk');const msg=document.getElementById('installMsg');const out=document.getElementById('installOutput');btn.disabled=true;btn.textContent='⏳ Instalando…';msg.className='restore-msg loading';msg.style.display='block';msg.textContent='⏳ Ejecutando instalador, espera…';out.className='install-output visible';out.textContent='';try{const r=await fetch('?action=install-display');const d=await r.json();out.textContent=d.output||'(sin salida)';out.scrollTop=out.scrollHeight;msg.className='restore-msg ok';msg.textContent='✔ Instalación completada.';btn.textContent='✔ Cerrar';btn.disabled=false;btn.onclick=function(){closeInstalar();};}catch(e){msg.className='restore-msg err';msg.textContent='✖ Error durante la instalación.';btn.textContent='▶ Confirmar instalación';btn.disabled=false;}}
 function openRestore(){document.getElementById('restoreModal').classList.add('open');document.getElementById('restoreFile').value='';const msg=document.getElementById('restoreMsg');msg.style.display='none';msg.className='restore-msg';}
@@ -1196,7 +1398,7 @@ function startMMDVMYSFLogs(){fetchMMDVMYSFLogs();mmdvmYsfTimer=setInterval(fetch
 function stopMMDVMYSFLogs(){clearInterval(mmdvmYsfTimer);mmdvmYsfTimer=null;}
 function startYSFTransmissionPoll(){fetchYSFTransmission();ysfTxTimer=setInterval(fetchYSFTransmission,4000);}
 async function fetchSysInfo(){try{const r=await fetch('?action=sysinfo');const d=await r.json();const cpuEl=document.getElementById('siCpu');cpuEl.textContent=d.cpu+' %';cpuEl.style.color=d.cpu>80?'var(--red)':d.cpu>50?'var(--amber)':'var(--green)';const tempEl=document.getElementById('siTemp');tempEl.textContent=d.temp||'—';const t=parseFloat(d.temp);tempEl.style.color=t>75?'var(--red)':t>60?'var(--amber)':'var(--green)';document.getElementById('siRam').textContent=d.ramUsed+' GB / '+d.ramTotal+' GB';document.getElementById('siRamFree').textContent=d.ramFree+' GB';document.getElementById('siDisk').textContent=d.diskUsed+' GB / '+d.diskTotal+' GB';document.getElementById('siDiskFree').textContent=d.diskFree+' GB';}catch(e){}}
-fetchSysInfo();setInterval(fetchSysInfo,8000);
+fetchSysInfo();setInterval(fetchSysInfo,2000);
 
 async function feditOpen(path){
     const msg=document.getElementById('feditMsg');

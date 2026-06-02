@@ -8,7 +8,10 @@ CIAN="\033[1;36m"
 GRIS="\033[0m"
 MARRON="\33[38;5;138m"
 
-			cd /home/pi/
-            wget --user-agent="YSFGateway" https://hostfiles.refcheck.radio/YSFHosts.txt
+   cd /home/pi/
+                    
+            wget --user-agent="EA4RCR" https://hostfiles.refcheck.radio/YSFHosts.txt
+            
+            
             sudo mv /home/pi/YSFHosts.txt /home/pi/YSFClients/YSFGateway/
-			sleep 3	
+   sleep 3

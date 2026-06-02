@@ -6,7 +6,7 @@ fecha_imagen="11-05-26"
 nombre_imagen="Opi3-"
 version="Opi3-11-05-26"
 
-# Añadir líneas vacías hasta tener al menos 58 líneas
+# Añadir líneas vacías hasta tener al menos 58 líneas 
 #sudo awk '{
 #    print
 #}
@@ -89,7 +89,7 @@ linea_YSFGateway=`expr substr $master 1 $largo1`
 masterYSFGateway=$(awk "NR==$linea_YSFGateway" $usuario/YSFClients/YSFGateway/YSFGateway.ini)
 masterYSFGateway=`echo "$masterYSFGateway" | tr -d '[[:space:]]'`
 
-#P ara que funcione hotspot pinchado en gpio
+#Para que funcione hotspot pinchado en gpio
 # Set GPIO20 and GPIO21 to output low (0)
 gpioset gpiochip0 20=0 &
 gpioset gpiochip0 21=0 &
@@ -104,7 +104,6 @@ gpioset gpiochip0 20=0 &
 sleep 0.2
 gpioset gpiochip0 20=1 &
 sleep 0.5
-
 # Done. GPIOs will return to input state after script ends
 bm=`sed -n '2p'  $usuario/MMDVMHost/MMDVMHost.ini`
 plus=`sed -n '2p'  $usuario/MMDVMHost/MMDVMHost.ini`
@@ -112,7 +111,4 @@ dstar=`sed -n '2p'  $usuario/MMDVMHost/MMDVMHost.ini`
 fusion=`sed -n '2p'  $usuario/MMDVMHost/MMDVMHost.ini`
 frbm=`sed -n '13p'  $usuario/MMDVMHost/MMDVMHost.ini`
 frplus=`sed -n '13p'  $usuario/MMDVMHost/MMDVMHost.ini`
-sudo wget -post-data http://associacioader.com/prueba1.php?callBM=$bm'&'callPLUS=$plus'&'masterBM=$masterbm'&'masterPLUS=$masterplus'&'radio=$masterradio'&'version=$version'&'ESPECIAL=$masterespecial'&'YSFGateway=$masterYSFGateway                  
-
-
- 
+sudo wget -post-data http://associacioader.com/prueba1.php?callBM=$bm'&'callPLUS=$plus'&'masterBM=$masterbm'&'masterPLUS=$masterplus'&'radio=$masterradio'&'version=$version'&'ESPECIAL=$masterespecial'&'YSFGateway=$masterYSFGateway

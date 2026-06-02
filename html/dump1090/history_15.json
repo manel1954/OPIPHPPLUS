@@ -1,0 +1,10 @@
+{ "now" : 1777896457.1,
+  "messages" : 4246,
+  "aircraft" : [
+    {"hex":"3471cd","flight":"FYS30GN ","alt_baro":2900,"squawk":"7210","mlat":[],"tisb":[],"messages":341,"seen":0.1,"rssi":-8.2},
+    {"hex":"3964f0","flight":"TVF21KT ","alt_baro":34000,"alt_geom":34225,"gs":493.0,"ias":271,"tas":454,"mach":0.780,"track":25.0,"track_rate":0.00,"roll":0.0,"mag_heading":21.3,"baro_rate":0,"geom_rate":32,"squawk":"1407","emergency":"none","category":"A3","nav_qnh":1013.6,"nav_altitude_mcp":34016,"nav_altitude_fms":34000,"nav_heading":21.8,"lat":40.361861,"lon":-4.097214,"nic":8,"rc":186,"seen_pos":6.7,"version":2,"nic_baro":1,"nac_p":9,"nac_v":1,"sil":3,"sil_type":"perhour","gva":2,"sda":2,"modea":true,"mlat":[],"tisb":[],"messages":232,"seen":0.5,"rssi":-20.9},
+    {"hex":"44cdc8","alt_baro":36000,"alt_geom":36275,"gs":506.4,"track":25.2,"baro_rate":0,"squawk":"4643","emergency":"none","category":"A3","nav_qnh":1013.6,"nav_altitude_mcp":36000,"nav_heading":0.0,"lat":40.567200,"lon":-3.970825,"nic":8,"rc":186,"seen_pos":17.7,"version":2,"nic_baro":1,"nac_p":9,"nac_v":1,"sil":3,"sil_type":"perhour","gva":2,"sda":2,"modea":true,"modec":true,"mlat":[],"tisb":[],"messages":1235,"seen":8.8,"rssi":-22.8},
+    {"hex":"3483d4","mlat":[],"tisb":[],"messages":91,"seen":104.7,"rssi":-20.0},
+    {"hex":"408262","category":"A3","version":2,"sil_type":"perhour","mlat":[],"tisb":[],"messages":762,"seen":265.1,"rssi":-22.8}
+  ]
+}
