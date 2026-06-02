@@ -1,0 +1,15 @@
+URL transformed to HTTPS due to an HSTS policy
+--2026-06-02 12:20:47--  https://associacioader.com/prueba1.php?callBM=Callsign=EAXXXX%0D&callPLUS=Callsign=EAXXXX%0D&masterBM=&masterPLUS=&radio=[IRCDDB&version=Opi3-11-05-26&ESPECIAL=radioemergencias.ddns.net&YSFGateway=Startup=ES-REMSPAIN
+Resolviendo associacioader.com (associacioader.com)... 31.214.178.77
+Conectando con associacioader.com (associacioader.com)[31.214.178.77]:443... conectado.
+Petición HTTP enviada, esperando respuesta... 200 OK
+Longitud: no especificado [text/html]
+Grabando a: «associacioader.com/prueba1.php?callBM=Callsign=EAXXXX%0D&callPLUS=Callsign=EAXXXX%0D&masterBM=&masterPLUS=&radio=[IRCDDB&version=Opi3-11-05-26&ESPECIAL=radioemergencias.ddns.net&YSFGateway=Startup=ES-REMSPAIN»
+
+     0K                                                         238K=0s
+
+2026-06-02 12:20:48 (238 KB/s) - «associacioader.com/prueba1.php?callBM=Callsign=EAXXXX%0D&callPLUS=Callsign=EAXXXX%0D&masterBM=&masterPLUS=&radio=[IRCDDB&version=Opi3-11-05-26&ESPECIAL=radioemergencias.ddns.net&YSFGateway=Startup=ES-REMSPAIN» guardado [3]
+
+ACABADO --2026-06-02 12:20:48--
+Tiempo total de reloj: 0,4s
+Descargados: 1 ficheros, 3 en 0s (238 KB/s)

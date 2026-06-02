@@ -1,0 +1,9 @@
+{ "now" : 1777896337.0,
+  "messages" : 2265,
+  "aircraft" : [
+    {"hex":"44cdc8","flight":"BEL4UT  ","alt_baro":36000,"alt_geom":36300,"gs":507.7,"ias":266,"tas":466,"mach":0.800,"track":25.3,"track_rate":-0.03,"roll":0.2,"mag_heading":21.6,"baro_rate":0,"geom_rate":32,"squawk":"4643","emergency":"none","category":"A3","nav_qnh":1013.6,"nav_altitude_mcp":36000,"nav_heading":0.0,"lat":40.349292,"lon":-4.105391,"nic":8,"rc":186,"seen_pos":0.3,"version":2,"nic_baro":1,"nac_p":9,"nac_v":1,"sil":3,"sil_type":"perhour","gva":2,"sda":2,"modea":true,"modec":true,"mlat":[],"tisb":[],"messages":406,"seen":0.1,"rssi":-11.4},
+    {"hex":"3483d4","mlat":[],"tisb":[],"messages":87,"seen":130.9,"rssi":-19.1},
+    {"hex":"408262","category":"A3","version":2,"sil_type":"perhour","mlat":[],"tisb":[],"messages":762,"seen":144.9,"rssi":-22.8},
+    {"hex":"347582","mlat":[],"tisb":[],"messages":23,"seen":290.4,"rssi":-16.0}
+  ]
+}
